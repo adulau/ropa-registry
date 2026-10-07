@@ -153,6 +153,27 @@
                   ]
               }
             },
+            "NIS2_references": {
+              "description": "Reference to related NIS 2 requirements for CSIRTs under Article 11 of Directive (EU) 2022/2555 (https://eur-lex.europa.eu/eli/dir/2022/2555/oj).",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "NIS 2 Art. 11(3)(a) - Monitoring and analysing cyber threats, vulnerabilities and incidents at national level and, upon request, providing assistance regarding real-time or near real-time monitoring of network and information systems",
+                  "NIS 2 Art. 11(3)(b) - Providing early warnings, alerts, announcements and dissemination of information on cyber threats, vulnerabilities and incidents",
+                  "NIS 2 Art. 11(3)(c) - Responding to incidents and providing assistance to the essential and important entities concerned, where applicable",
+                  "NIS 2 Art. 11(3)(d) - Collecting and analysing forensic data and providing dynamic risk and incident analysis and situational awareness regarding cybersecurity",
+                  "NIS 2 Art. 11(3)(e) - Providing, upon request, proactive scanning of network and information systems to detect vulnerabilities with a potential significant impact",
+                  "NIS 2 Art. 11(3)(f) - Participating in the CSIRTs network and providing mutual assistance in accordance with capacities and competencies upon request",
+                  "NIS 2 Art. 11(3)(g) - Where applicable, acting as a coordinator for coordinated vulnerability disclosure under Article 12(1)",
+                  "NIS 2 Art. 11(3)(h) - Contributing to the deployment of secure information-sharing tools pursuant to Article 10(3)",
+                  "NIS 2 Art. 11(4) - Establishing cooperation relationships with relevant stakeholders in the private sector",
+                  "NIS 2 Art. 11(5)(a) - Promoting common or standardised practices, classification schemes and taxonomies for incident-handling procedures",
+                  "NIS 2 Art. 11(5)(b) - Promoting common or standardised practices, classification schemes and taxonomies for crisis management",
+                  "NIS 2 Art. 11(5)(c) - Promoting common or standardised practices, classification schemes and taxonomies for coordinated vulnerability disclosure under Article 12(1)"
+                ]
+              }
+            },
             "others": {
               "description": "Other reference or explanation of the lawfulness of this processing activity. No related to any GDPR article.",
               "type": "array",

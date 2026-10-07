@@ -1,15 +1,17 @@
 import base64
 from copy import deepcopy
 from io import BytesIO
+from hashlib import sha256
 import json
 from pathlib import Path
 
 import pytest
+from jsonschema import Draft7Validator
 from werkzeug.security import generate_password_hash
 
 from ropa import create_app
 from ropa.db import get_db, init_db, utcnow
-from ropa.schema import default_activity, normalize_activity, validate_activity
+from ropa.schema import activity_schema, default_activity, enum_values, normalize_activity, validate_activity
 
 
 def basic(username, password="pw"):
@@ -293,6 +295,7 @@ def seed_preupgrade_activity(app, client, payload, status="active", valid=True, 
         )
         # Model an existing database created before migration tracking existed.
         db.execute("DROP TABLE IF EXISTS schema_migrations")
+        db.execute("DROP TABLE IF EXISTS activity_schema_state")
         db.commit()
         return dict(db.execute("SELECT * FROM activities WHERE uuid=?", (uuid_value,)).fetchone())
 
@@ -329,6 +332,7 @@ def test_upgrade_revalidates_previously_unrestricted_rights(app, client, value, 
         assert details["before"]["schema_valid"] == 1
         assert details["after"]["schema_valid"] == 0
         migration = dict(db.execute("SELECT * FROM schema_migrations").fetchone())
+        schema_state = dict(db.execute("SELECT * FROM activity_schema_state").fetchone())
 
     upgraded_client = upgraded.test_client()
     response = upgraded_client.get(f"/api/v1/activities/{before['uuid']}", headers=basic("viewer"))
@@ -352,6 +356,7 @@ def test_upgrade_revalidates_previously_unrestricted_rights(app, client, value, 
         assert dict(db.execute("SELECT * FROM activities WHERE uuid=?", (before["uuid"],)).fetchone()) == row
         assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 1
         assert dict(db.execute("SELECT * FROM schema_migrations").fetchone()) == migration
+        assert dict(db.execute("SELECT * FROM activity_schema_state").fetchone()) == schema_state
 
 
 @pytest.mark.parametrize("spelling", ["rights", "rigths"])
@@ -395,8 +400,180 @@ def test_upgrade_rolls_back_changes_and_marker_on_failure(app, client, monkeypat
         assert [dict(row) for row in db.execute("SELECT * FROM activities ORDER BY id")] == before
         assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 0
         assert db.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone() is None
+        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='activity_schema_state'").fetchone() is None
     monkeypatch.undo()
     upgraded = restart_app(app)
     with upgraded.app_context():
         rows = get_db().execute("SELECT status,schema_valid FROM activities").fetchall()
         assert all(row["status"] == "draft" and row["schema_valid"] == 0 for row in rows)
+
+
+def test_nis2_references_are_optional_and_validate_all_csirt_references():
+    payload = default_activity()
+    assert validate_activity(payload) == []
+    payload["legal_ground"]["NIS2_references"] = []
+    assert validate_activity(payload) == []
+    references = enum_values("legal_ground", "NIS2_references", "items")
+    assert len(references) == 12
+    assert {reference.split(" - ")[0] for reference in references} == {
+        *(f"NIS 2 Art. 11(3)({letter})" for letter in "abcdefgh"),
+        "NIS 2 Art. 11(4)",
+        *(f"NIS 2 Art. 11(5)({letter})" for letter in "abc"),
+    }
+    payload["legal_ground"]["NIS2_references"] = references
+    payload["legal_ground"]["NISD_references"] = enum_values("legal_ground", "NISD_references", "items")
+    assert validate_activity(payload) == []
+
+
+@pytest.mark.parametrize("value", ["NIS 2", ["unknown reference"], [42], None])
+def test_nis2_references_reject_malformed_values(value):
+    payload = default_activity()
+    payload["legal_ground"]["NIS2_references"] = value
+    errors = validate_activity(payload)
+    assert any(error["path"].startswith("legal_ground.NIS2_references") for error in errors)
+
+
+def test_nis2_references_import_api_and_export_roundtrip(app, client):
+    payload = restriction_activity()
+    payload["legal_ground"]["NIS2_references"] = enum_values("legal_ground", "NIS2_references", "items")
+    payload["legal_ground"]["NISD_references"] = enum_values("legal_ground", "NISD_references", "items")[:1]
+    login_admin(app, client)
+    response = client.post("/activities/import", data={
+        "_csrf_token": "test-csrf", "organisation_id": app.config["TEST_ORG1"],
+        "json_file": (BytesIO(json.dumps([payload]).encode()), "nis2.json"),
+    })
+    assert response.status_code == 200
+    assert b"0 record(s) have schema warnings" in response.data
+    response = client.get("/api/v1/activities", headers=basic("viewer"))
+    assert response.status_code == 200
+    activity = response.get_json()[0]
+    assert activity["activity"] == payload
+    assert activity["schema_valid"] is True
+    payload["legal_ground"]["NIS2_references"] = payload["legal_ground"]["NIS2_references"][:2]
+    response = client.put(f"/api/v1/activities/{activity['uuid']}", headers=basic("admin"), json={"activity": payload})
+    assert response.status_code == 200
+    assert response.get_json()["activity"] == payload
+    assert client.get("/activities/export.json").get_json() == [payload]
+    response = client.get("/activities/export.md")
+    assert response.status_code == 200
+    assert payload["legal_ground"]["NIS2_references"][0].encode() in response.data
+    for url, headers in (("/api/openapi.json", {}), ("/api/v1/schema", basic("viewer"))):
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200
+        schema = response.get_json()
+        if url == "/api/openapi.json":
+            schema = schema["components"]["schemas"]["ProcessingActivity"]
+        assert schema["properties"]["legal_ground"]["properties"]["NIS2_references"]["items"]["enum"] == enum_values("legal_ground", "NIS2_references", "items")
+
+
+@pytest.mark.parametrize("previous_marker", ["rights-migration", "schema-fingerprint", "current-schema-fingerprint"])
+def test_schema_change_revalidates_existing_nis2_values(app, client, previous_marker):
+    payload = restriction_activity()
+    payload["legal_ground"]["NIS2_references"] = ["previously unrestricted value"]
+    before = seed_preupgrade_activity(app, client, payload)
+    if previous_marker == "rights-migration":
+        marker = "restriction-rights-validation-v1"
+    else:
+        old_schema = deepcopy(activity_schema())
+        if previous_marker == "schema-fingerprint":
+            del old_schema["properties"]["legal_ground"]["properties"]["NIS2_references"]
+        marker = "activity-schema-validation-" + sha256(
+            json.dumps(old_schema, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+    with app.app_context():
+        db = get_db()
+        db.execute("CREATE TABLE schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)")
+        db.execute("INSERT INTO schema_migrations VALUES(?,?)", (marker, utcnow()))
+        db.commit()
+    upgraded = restart_app(app)
+    response = upgraded.test_client().get(f"/api/v1/activities/{before['uuid']}", headers=basic("viewer"))
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["schema_valid"] is False
+    assert result["status"] == "draft"
+    assert result["validation_errors"] == validate_activity(payload)
+    with restart_app(upgraded).app_context():
+        db = get_db()
+        assert db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == (
+            1 if previous_marker == "current-schema-fingerprint" else 2
+        )
+        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 1
+
+
+@pytest.mark.parametrize("entrypoint", ["startup", "init-db"])
+@pytest.mark.parametrize("fail_first", [False, True])
+def test_returning_to_previous_schema_revalidates_new_records(app, monkeypatch, entrypoint, fail_first):
+    strict_schema = deepcopy(activity_schema())
+    permissive_schema = deepcopy(strict_schema)
+    new_reference = "NIS 2 reference introduced only by the newer schema"
+    permissive_schema["properties"]["legal_ground"]["properties"]["NIS2_references"]["items"]["enum"].append(new_reference)
+    running_schema = [strict_schema]
+    monkeypatch.setattr("ropa.schema.activity_schema", lambda: running_schema[0])
+    monkeypatch.setattr("ropa.schema.validator", lambda: Draft7Validator(running_schema[0]))
+    with app.app_context():
+        strict_state = dict(get_db().execute("SELECT * FROM activity_schema_state").fetchone())
+
+    running_schema[0] = permissive_schema
+    newer_app = restart_app(app)
+    payload = restriction_activity()
+    payload["legal_ground"]["NIS2_references"] = [new_reference]
+    assert list(Draft7Validator(strict_schema).iter_errors(payload))
+    assert validate_activity(payload) == []
+    response = newer_app.test_client().post(
+        "/api/v1/activities", headers=basic("admin"),
+        json={"organisation_id": app.config["TEST_ORG1"], "activity": payload},
+    )
+    assert response.status_code == 201
+    record = response.get_json()
+    assert record["schema_valid"] is True
+    assert record["status"] == "active"
+    with newer_app.app_context():
+        db = get_db()
+        permissive_state = dict(db.execute("SELECT * FROM activity_schema_state").fetchone())
+        assert permissive_state["fingerprint"] != strict_state["fingerprint"]
+        # Both schemas have historical markers, including the one we roll back to.
+        assert db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+
+    running_schema[0] = strict_schema
+    if fail_first:
+        with monkeypatch.context() as failing:
+            def interrupted(payload):
+                raise RuntimeError("interrupted rollback validation")
+            failing.setattr("ropa.schema.validate_activity", interrupted)
+            if entrypoint == "startup":
+                with pytest.raises(RuntimeError, match="interrupted rollback validation"):
+                    restart_app(newer_app)
+            else:
+                result = newer_app.test_cli_runner().invoke(args=["init-db"])
+                assert result.exit_code != 0
+                assert str(result.exception) == "interrupted rollback validation"
+        with newer_app.app_context():
+            db = get_db()
+            assert dict(db.execute("SELECT * FROM activity_schema_state").fetchone()) == permissive_state
+            row = db.execute("SELECT * FROM activities WHERE uuid=?", (record["uuid"],)).fetchone()
+            assert row["schema_valid"] == 1 and row["status"] == "active"
+            assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 0
+
+    if entrypoint == "startup":
+        rolled_back_app = restart_app(newer_app)
+    else:
+        result = newer_app.test_cli_runner().invoke(args=["init-db"])
+        assert result.exit_code == 0, result.output
+        rolled_back_app = newer_app
+    response = rolled_back_app.test_client().get(f"/api/v1/activities/{record['uuid']}", headers=basic("viewer"))
+    assert response.status_code == 200
+    result = response.get_json()
+    assert result["activity"] == payload
+    assert result["schema_valid"] is False
+    assert result["status"] == "draft"
+    assert result["validation_errors"] == validate_activity(payload)
+    with rolled_back_app.app_context():
+        db = get_db()
+        current_state = dict(db.execute("SELECT * FROM activity_schema_state").fetchone())
+        assert current_state["fingerprint"] == strict_state["fingerprint"]
+        assert db.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 2
+        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 1
+    with restart_app(rolled_back_app).app_context():
+        db = get_db()
+        assert dict(db.execute("SELECT * FROM activity_schema_state").fetchone()) == current_state
+        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 1
