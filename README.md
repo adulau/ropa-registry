@@ -14,6 +14,11 @@ This was done to operate the GDPR ROPA of a CSIRT. But it could work for any org
   - **viewer** — read and export all processing activities.
   - **admin** — full access, plus organisation, department and user creation and audit-log access.
 - JSON import of one activity or an array of activities.
+- Complete schema-driven form editing alongside the raw JSON editor, with nested
+  fields, repeated entries and predefined choices. Switching editors preserves
+  values and additional fields; raw JSON editing also works without JavaScript.
+  The editor retains numeric JSON tokens to avoid rounding large integers.
+  Browsers without lossless JSON number support keep the raw JSON editor available.
 - Imports and API writes accept both `data_subject_rights.restrictions[].rigths`
   (legacy spelling) and `rights`. New records, JSON exports and API responses use
   only `rights`, including responses for previously stored legacy records. If
@@ -157,8 +162,15 @@ For a higher-assurance deployment, consider forwarding audit events to an extern
 ## Tests
 
 ```bash
+pip install -r requirements-dev.txt
 pytest -q
 ```
+
+Browser tests use Chromium from `PATH` when available. Otherwise install the
+Playwright browser with `python -m playwright install chromium` before running
+the tests. Run only browser checks with `pytest -q tests/test_editor_browser.py`.
+If Playwright is not installed, browser tests are skipped and the Python
+application tests still run.
 
 ## Licensing
 
