@@ -2,7 +2,7 @@ import json
 import uuid
 from functools import wraps
 
-from flask import Blueprint, Response, abort, jsonify, request
+from flask import Blueprint, Response, abort, jsonify, render_template, request
 
 from .audit import log_action
 from .auth import api_auth_user
@@ -186,8 +186,4 @@ def openapi():
 
 @bp.get("/docs")
 def docs():
-    return Response("""<!doctype html><html><head><title>ROPA API</title><style>body{font:16px system-ui;max-width:900px;margin:3rem auto;padding:0 1rem}code,pre{background:#f4f4f4;padding:.2rem .4rem}li{margin:.6rem 0}</style></head><body>
-    <h1>ROPA Registry API</h1><p>The OpenAPI 3.1 document is available at <a href='/api/openapi.json'>/api/openapi.json</a>.</p>
-    <p>API endpoints use HTTP Basic authentication with application users and the same RBAC rules as the web interface.</p>
-    <ul><li><code>GET /api/v1/activities</code></li><li><code>POST /api/v1/activities</code></li><li><code>GET /api/v1/activities/{uuid}</code></li><li><code>PUT /api/v1/activities/{uuid}</code></li><li><code>DELETE /api/v1/activities/{uuid}</code> (archives)</li><li><code>GET /api/v1/activities/{uuid}/markdown</code></li><li><code>GET /api/v1/schema</code></li></ul>
-    </body></html>""", mimetype="text/html")
+    return render_template("api_docs.html")

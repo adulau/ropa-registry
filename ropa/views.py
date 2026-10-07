@@ -9,7 +9,7 @@ from flask import (
 from .audit import log_action
 from .auth import current_user, login_required
 from .db import get_db, utcnow
-from .markdown_export import render_register
+from .markdown_export import render_activity, render_register
 from .permissions import can_edit_scope, can_view_activity, require_activity_view, require_scope_edit
 from .schema import activity_schema, default_activity, normalize_activity, validate_activity
 from .security import validate_csrf
@@ -147,7 +147,8 @@ def activities():
 def activity_detail(uuid_value):
     activity = _get_activity(uuid_value)
     require_activity_view(current_user(), activity)
-    return render_template("activity_detail.html", activity=activity)
+    return render_template("activity_detail.html", activity=activity,
+                           activity_markdown=render_activity(activity["payload"], activity))
 
 
 @bp.route("/activities/new", methods=("GET", "POST"))

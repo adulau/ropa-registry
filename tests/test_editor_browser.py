@@ -1,5 +1,6 @@
 """Browser regression checks for the schema form and JSON editor."""
 import json
+import re
 import shutil
 import threading
 from decimal import Decimal
@@ -442,3 +443,113 @@ def test_reselecting_legacy_enum_restores_displayed_and_saved_value(editor_page,
     control(page, *path).select_option("legacy")
     save(page)
     assert page.context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
+
+
+def test_vitrine_json_tree_raw_search_and_download_preserve_payload(editor_page, editor_server, tmp_path):
+    page = editor_page
+    payload = default_activity()
+    payload['extension'] = {
+        'large_integer': 90071992547409931234567890,
+        'hostile_text': '</pre><script>window.injected=true</script>',
+    }
+    uuid = create_record(page, editor_server, payload)
+    page.goto(f'{editor_server}/activities/{uuid}')
+    viewer = page.locator('vt-json')
+    playwright.expect(viewer).to_be_visible()
+    playwright.expect(viewer.get_by_role('tree')).to_be_visible()
+    playwright.expect(page.locator('[data-record-viewer=json] .viewer-source')).to_be_hidden()
+    viewer.get_by_role('tab', name='Raw', exact=True).click()
+    playwright.expect(viewer.locator('[part=code]')).to_contain_text(str(payload['extension']['large_integer']))
+    viewer.get_by_role('button', name='Search', exact=True).click()
+    viewer.get_by_role('searchbox').fill('large_integer')
+    playwright.expect(viewer.locator('[part=search-count]')).to_contain_text('1')
+    with page.expect_download() as pending:
+        viewer.get_by_role('button', name='Download', exact=True).click()
+    download = pending.value
+    destination = tmp_path / download.suggested_filename
+    download.save_as(destination)
+    assert json.loads(destination.read_text()) == payload
+    assert page.evaluate('window.injected') is None
+
+
+def test_vitrine_markdown_preview_blocks_content_execution_and_remote_images(editor_page, editor_server):
+    page = editor_page
+    payload = default_activity()
+    payload['name'] = 'Incident response'
+    payload['description']['summary'] = (
+        '<img src=x onerror="window.injected=true">\n\n'
+        '![Remote image](https://example.invalid/tracker.png)\n\n'
+        '[Bad link](javascript:alert(1))'
+    )
+    uuid = create_record(page, editor_server, payload)
+    requests = []
+    page.on('request', lambda request: requests.append(request.url))
+    page.goto(f'{editor_server}/activities/{uuid}')
+    page.locator('[data-record-viewer=markdown]').locator('..').evaluate('element => element.open = true')
+    viewer = page.locator('vt-markdown')
+    playwright.expect(viewer).to_be_visible()
+    playwright.expect(viewer.get_by_role('heading', name=re.compile('^1 — Incident response'))).to_be_visible()
+    assert viewer.locator('img, script, [onerror], a[href^="javascript:"]').count() == 0
+    assert page.evaluate('window.injected') is None
+    assert all(url.startswith(editor_server) for url in requests)
+    viewer.get_by_role('tab', name='Source', exact=True).click()
+    playwright.expect(viewer.locator('[part=code]')).to_contain_text('Remote image')
+
+
+@pytest.mark.parametrize('disabled_javascript', [True, False], ids=['no-javascript', 'missing-viewer-module'])
+def test_record_viewer_text_fallback(editor_page, editor_browser, editor_server, disabled_javascript):
+    uuid = create_record(editor_page, editor_server, default_activity())
+    context = editor_browser.new_context(storage_state=editor_page.context.storage_state(),
+                                         java_script_enabled=not disabled_javascript)
+    if not disabled_javascript:
+        context.route('**/static/vendor/vitrine/viewers.js', lambda route: route.abort())
+    page = context.new_page()
+    try:
+        page.goto(f'{editor_server}/activities/{uuid}')
+        source = page.locator('[data-record-viewer=json] .viewer-source')
+        playwright.expect(source).to_be_visible()
+        assert json.loads(source.inner_text()) == default_activity()
+        page.locator('[data-record-viewer=markdown]').locator('..').evaluate('element => element.open = true')
+        playwright.expect(page.locator('[data-record-viewer=markdown] .viewer-source')).to_be_visible()
+    finally:
+        context.close()
+
+
+@pytest.mark.parametrize('bad_content', ["'x'.repeat(2 * 1024 * 1024 + 1)", "'{'"],
+                         ids=['content-too-large', 'invalid-json'])
+def test_viewer_error_restores_original_text(editor_page, editor_server, bad_content):
+    page = editor_page
+    payload = default_activity()
+    uuid = create_record(page, editor_server, payload)
+    page.goto(f'{editor_server}/activities/{uuid}')
+    viewer = page.locator('vt-json')
+    playwright.expect(viewer).to_be_visible()
+    viewer.evaluate(f"element => {{ element.content = {bad_content}; }}")
+    playwright.expect(viewer).to_be_hidden()
+    source = page.locator('[data-record-viewer=json] .viewer-source')
+    playwright.expect(source).to_be_visible()
+    assert json.loads(source.inner_text()) == payload
+
+
+def test_vitrine_and_registry_pages_fit_mobile_viewport(editor_page, editor_server):
+    page = editor_page
+    uuid = create_record(page, editor_server, default_activity())
+    page.set_viewport_size({'width': 390, 'height': 844})
+    for path in ('/', '/activities', f'/activities/{uuid}', '/activities/import', '/admin/organisations',
+                 '/admin/departments', '/admin/users', '/admin/audit', '/api/docs'):
+        response = page.goto(editor_server + path)
+        assert response.status == 200
+        if path == f'/activities/{uuid}':
+            playwright.expect(page.locator('vt-json')).to_be_visible()
+            page.locator('[data-record-viewer=markdown]').locator('..').evaluate('element => element.open = true')
+            playwright.expect(page.locator('vt-markdown')).to_be_visible()
+            for component, tab in (('vt-json', 'Raw'), ('vt-markdown', 'Source')):
+                viewer = page.locator(component)
+                button = viewer.get_by_role('tab', name=tab, exact=True)
+                bounds = button.bounding_box()
+                frame = viewer.bounding_box()
+                assert bounds['x'] + bounds['width'] <= frame['x'] + frame['width']
+                button.click()
+                playwright.expect(button).to_have_attribute('aria-selected', 'true')
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth'), path
+        playwright.expect(page.get_by_role('navigation', name='Main navigation')).to_be_visible()

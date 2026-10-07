@@ -37,6 +37,12 @@ This was done to operate the GDPR ROPA of a CSIRT. But it could work for any org
 - SQLite storage.
 - Minimal versioned API with HTTP Basic authentication and OpenAPI 3.1 at `/api/openapi.json`.
 - No JavaScript framework and only two runtime Python dependencies.
+- Self-hosted [Vitrine](https://github.com/ecrou-exact/vitrine) JSON and Markdown
+  viewers, with collapsible trees, search, copy, download and fullscreen controls.
+  The interface shares Vitrine's light theme. Text fallbacks remain available
+  without JavaScript. Pinned assets and rebuild instructions are in
+  [the vendor README](ropa/static/vendor/vitrine/README.md); serving the app
+  requires no Node.js build step or third-party asset requests.
 
 ## Quick start
 
