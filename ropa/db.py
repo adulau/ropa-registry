@@ -5,6 +5,7 @@ from pathlib import Path
 
 import click
 from flask import current_app, g
+from flask.cli import with_appcontext
 from werkzeug.security import generate_password_hash
 
 
@@ -105,15 +106,71 @@ def init_db():
     db = get_db()
     db.executescript(SCHEMA_SQL)
     db.commit()
+    upgrade_activity_validation()
+
+
+def upgrade_activity_validation():
+    """Revalidate pre-upgrade activities once, atomically, under the rights schema."""
+    from .audit import log_action
+    from .schema import validate_activity
+
+    db = get_db()
+    migration = "restriction-rights-validation-v1"
+    with db:
+        # Serialize concurrent application startups and commit the marker with the updates.
+        db.execute("BEGIN IMMEDIATE")
+        db.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
+            name TEXT PRIMARY KEY,
+            applied_at TEXT NOT NULL
+        )""")
+        if db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (migration,)).fetchone():
+            return
+        for row in db.execute("SELECT * FROM activities").fetchall():
+            try:
+                payload = json.loads(row["payload_json"])
+            except ValueError as exc:
+                errors = [{"path": "$", "message": f"Invalid JSON: {exc}"}]
+            else:
+                errors = validate_activity(payload)
+            valid = int(not errors)
+            errors_json = json.dumps(errors, ensure_ascii=False)
+            status = "draft" if errors and row["status"] == "active" else row["status"]
+            before = {
+                "schema_valid": row["schema_valid"],
+                "validation_errors_json": row["validation_errors_json"],
+                "status": row["status"],
+            }
+            after = {
+                "schema_valid": valid, "validation_errors_json": errors_json, "status": status,
+            }
+            if before != after:
+                db.execute(
+                    """UPDATE activities SET schema_valid=?,validation_errors_json=?,status=?,updated_at=?
+                       WHERE id=?""",
+                    (valid, errors_json, status, utcnow(), row["id"]),
+                )
+                log_action(None, "schema_revalidate", "activity", row["uuid"],
+                           row["organisation_id"], row["department_id"],
+                           details={"migration": migration, "before": before, "after": after})
+        db.execute("INSERT INTO schema_migrations(name,applied_at) VALUES(?,?)", (migration, utcnow()))
 
 
 def init_app(app):
     app.teardown_appcontext(close_db)
     app.cli.add_command(init_db_command)
     app.cli.add_command(create_admin_command)
+    # Upgrade existing databases before any read path can expose stale validation metadata.
+    # Fresh databases remain initialized explicitly through init-db.
+    if Path(app.config["DATABASE"]).is_file():
+        with app.app_context():
+            if get_db().execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='activities'"
+            ).fetchone():
+                upgrade_activity_validation()
 
 
 @click.command("init-db")
+@with_appcontext
 def init_db_command():
     init_db()
     click.echo("Initialized the database.")
@@ -122,6 +179,7 @@ def init_db_command():
 @click.command("create-admin")
 @click.argument("username")
 @click.option("--password", prompt=True, hide_input=True, confirmation_prompt=True)
+@with_appcontext
 def create_admin_command(username, password):
     import uuid
 

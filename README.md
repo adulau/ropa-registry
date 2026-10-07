@@ -54,6 +54,19 @@ Open <http://127.0.0.1:5000>, sign in as the admin, then:
 
 For production, do **not** use Flask's development server. Put the application behind a production WSGI server/reverse proxy, configure TLS, set a strong `ROPA_SECRET_KEY`, restrict filesystem permissions on the SQLite database, and back up both the database and exported register.
 
+## Upgrading existing databases
+
+Back up the SQLite database before upgrading. On the first application startup
+with the corrected `rights` schema (or when running `flask --app app init-db`),
+a transactional migration revalidates every persisted activity and refreshes its
+validation state and errors. Invalid active records become drafts; draft and
+archived records retain their status. Valid drafts are not automatically activated.
+Stored payloads remain unchanged, and validation/status changes are recorded in
+the audit log. A migration marker prevents repeat work on later startups.
+
+This also catches malformed `rights` values that the previous schema accepted as
+unrestricted additional properties, despite marking those records valid and active.
+
 ## Data model
 
 The SQLite database has five main tables:
