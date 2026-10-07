@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% block title %}API · ROPA Registry{% endblock %}
+{% block content %}
+<div class="page-head"><div><div class="eyebrow">Developer reference</div><h1>ROPA Registry API</h1><p class="muted">Access processing activities using the versioned JSON API.</p></div><a class="button" href="{{ url_for('api.openapi') }}">OpenAPI 3.1 document</a></div>
+<section class="card"><h2>Authentication</h2><p>API endpoints use HTTP Basic authentication with application users and the same role and scope rules as the web interface.</p></section>
+<section class="card"><h2>Endpoints</h2><div class="table-wrap"><table><thead><tr><th>Method</th><th>Path</th><th>Action</th></tr></thead><tbody>
+<tr><td><span class="badge ok">GET</span></td><td><code>/api/v1/activities</code></td><td>List activities</td></tr>
+<tr><td><span class="badge">POST</span></td><td><code>/api/v1/activities</code></td><td>Create an activity</td></tr>
+<tr><td><span class="badge ok">GET</span></td><td><code>/api/v1/activities/{uuid}</code></td><td>Read an activity</td></tr>
+<tr><td><span class="badge">PUT</span></td><td><code>/api/v1/activities/{uuid}</code></td><td>Update an activity</td></tr>
+<tr><td><span class="badge warn">DELETE</span></td><td><code>/api/v1/activities/{uuid}</code></td><td>Archive an activity</td></tr>
+<tr><td><span class="badge ok">GET</span></td><td><code>/api/v1/activities/{uuid}/markdown</code></td><td>Export Markdown</td></tr>
+<tr><td><span class="badge ok">GET</span></td><td><a href="{{ url_for('api.get_schema') }}"><code>/api/v1/schema</code></a></td><td>Read the JSON schema</td></tr>
+</tbody></table></div></section>
+{% endblock %}

@@ -1,0 +1,35 @@
+/* Vitrine Light — default light theme. Values: docs/DESIGN_SYSTEM.md §2. */
+[data-theme='light'] {
+  color-scheme: light;
+  --vt-bg: #f3f4f1;
+  --vt-surface: #ffffff;
+  --vt-surface-sunken: #eaece7;
+  --vt-surface-raised: #ffffff;
+  --vt-border: #d6d9d2;
+  --vt-border-strong: #b9beb4;
+  --vt-fg: #11151c;
+  --vt-fg-muted: #4a5260;
+  --vt-accent: #14b8a6;
+  --vt-accent-fg: #0a6e6f;
+  --vt-on-accent: #11151c;
+  --vt-accent-soft: rgba(20, 184, 166, 0.12);
+  --vt-highlight: rgba(242, 169, 59, 0.35);
+  --vt-highlight-current: rgba(242, 169, 59, 0.7);
+  --vt-line-highlight: rgba(20, 184, 166, 0.1);
+  --vt-success: #0a6e6f;
+  --vt-warning: #a6510b;
+  --vt-danger: #b2384f;
+  --vt-info: #2f55c9;
+  --vt-diff-added: rgba(20, 184, 166, 0.12);
+  --vt-diff-removed: rgba(178, 56, 79, 0.12);
+  --vt-shadow: 0 8px 24px rgba(17, 21, 28, 0.12);
+  --vt-syntax-keyword: #7a3ec8;
+  --vt-syntax-string: #0a6e6f;
+  --vt-syntax-number: #a6510b;
+  --vt-syntax-function: #2f55c9;
+  --vt-syntax-type: #b2384f;
+  --vt-syntax-comment: #5f6773;
+  --vt-syntax-attr: #2f55c9;
+  --vt-syntax-tag: #b2384f;
+  --vt-syntax-meta: #4a5260;
+}

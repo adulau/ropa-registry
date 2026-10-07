@@ -7,8 +7,10 @@
   <section class="card"><h2>Purpose</h2><p>{{ activity['payload'].get('purpose','—') }}</p><h2>Description</h2><p><strong>Type:</strong> {{ activity['payload'].get('description',{}).get('type','—') }}</p><p>{{ activity['payload'].get('description',{}).get('summary','—') }}</p><h2>Controller</h2><p>{{ activity['payload'].get('controller','—') }}</p><h2>Retention</h2><p>{{ activity['payload'].get('retention_period','—') }}</p></section>
   <section class="card"><h2>Data subjects</h2><ul>{% for x in activity['payload'].get('data_subjects',[]) %}<li>{{ x }}</li>{% else %}<li class="muted">Not specified</li>{% endfor %}</ul><h2>Recipients</h2><ul>{% for x in activity['payload'].get('recipients',[]) %}<li>{{ x }}</li>{% else %}<li class="muted">Not specified</li>{% endfor %}</ul><h2>International transfer</h2><p>{{ 'Yes' if activity['payload'].get('international_transfer',{}).get('transfer') else 'No' }}</p></section>
 </div>
-<details class="card" open><summary><strong>Complete JSON record</strong></summary><pre>{{ activity['payload']|tojson(indent=2) }}</pre></details>
+<details class="card record-panel" open><summary><strong>Complete JSON record</strong><span class="muted">Explore every field</span></summary><div data-record-viewer="json"><pre class="viewer-source">{{ activity['payload']|tojson(indent=2) }}</pre></div></details>
+<details class="card record-panel"><summary><strong>Readable record</strong><span class="muted">Markdown preview and source</span></summary><div data-record-viewer="markdown"><pre class="viewer-source">{{ activity_markdown }}</pre></div></details>
 {% if current_user['role']=='admin' or (current_user['role']=='manager' and current_user['organisation_id']==activity['organisation_id'] and (current_user['department_id'] is none or current_user['department_id']==activity['department_id'])) %}
 <form method="post" action="{{ url_for('views.activity_archive',uuid_value=activity['uuid']) }}" onsubmit="return confirm('Archive this processing activity?')"><input type="hidden" name="_csrf_token" value="{{ csrf_token() }}"><button class="danger">Archive activity</button></form>
 {% endif %}
+<script type="module" src="{{ url_for('static', filename='record-viewers.js') }}"></script>
 {% endblock %}
