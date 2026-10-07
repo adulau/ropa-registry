@@ -17,6 +17,8 @@ This was done to operate the GDPR ROPA of a CSIRT. But it could work for any org
 - Complete schema-driven form editing alongside the raw JSON editor, with nested
   fields, repeated entries and predefined choices. Switching editors preserves
   values and additional fields; raw JSON editing also works without JavaScript.
+  The editor retains numeric JSON tokens to avoid rounding large integers.
+  Browsers without lossless JSON number support keep the raw JSON editor available.
 - Imports and API writes accept both `data_subject_rights.restrictions[].rigths`
   (legacy spelling) and `rights`. New records, JSON exports and API responses use
   only `rights`, including responses for previously stored legacy records. If

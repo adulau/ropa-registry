@@ -13,8 +13,21 @@
   let model;
   let mode = "json";
   let nextId = 0;
+  const numberPattern = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
+  const exactNumbersSupported = typeof JSON.rawJSON === "function" && typeof JSON.isRawJSON === "function"
+    && JSON.parse("0", (key, value, context) => context && context.source === "0") === true;
+  const exactNumber = value => typeof JSON.isRawJSON === "function" && JSON.isRawJSON(value);
+  const numberText = value => exactNumber(value) ? value.rawJSON : String(value);
+  function parseJSON(text) {
+    if (!exactNumbersSupported) {
+      throw new Error("Update your browser to use the form editor safely, or continue with the JSON editor.");
+    }
+    // The reviver source retains each original numeric token before any rounding.
+    // rawJSON makes stringify emit that token directly, including inside extra fields.
+    return JSON.parse(text, (key, value, context) => typeof value === "number" ? JSON.rawJSON(context.source) : value);
+  }
   const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key);
-  const object = value => value !== null && typeof value === "object" && !Array.isArray(value);
+  const object = value => value !== null && typeof value === "object" && !Array.isArray(value) && !exactNumber(value);
   const fieldLabels = new Map([["id", "ID"], ["id_old", "Old ID"], ["special_catgories", "Special Categories"]]);
   const label = key => fieldLabels.get(String(key))
     || String(key).replace(/_/g, " ").replace(/\b\w/g, char => char.toUpperCase());
@@ -62,7 +75,8 @@
   function matches(value, type) {
     if (type === "object") return object(value);
     if (type === "array") return Array.isArray(value);
-    if (type === "integer") return Number.isInteger(value);
+    if (type === "number" && exactNumber(value)) return true;
+    if (type === "integer") return Number.isInteger(exactNumber(value) ? Number(value.rawJSON) : value);
     return typeof value === type;
   }
   function showError(message) {
@@ -187,7 +201,7 @@
           : "JSON value", "hint"));
         input.addEventListener("input", () => {
           try {
-            set(JSON.parse(input.value));
+            set(parseJSON(input.value));
             input.setCustomValidity("");
           } catch {
             input.setCustomValidity("Enter a valid JSON value.");
@@ -209,7 +223,10 @@
         wrapper.append(selectedText);
         input.addEventListener("change", () => {
           if (input.value === "") { delete parent[key]; remove.hidden = true; selectedText.textContent = ""; }
-          else if (input.value !== "legacy") { set(definition.enum[Number(input.value)]); selectedText.textContent = String(parent[key]); }
+          else {
+            set(input.value === "legacy" ? value : definition.enum[Number(input.value)]);
+            selectedText.textContent = String(parent[key]);
+          }
         });
       } else if (definition.type === "boolean") {
         input = node("select");
@@ -222,12 +239,16 @@
         });
       } else if (["number", "integer"].includes(definition.type)) {
         input = node("input");
-        input.type = "number";
-        input.step = definition.type === "integer" ? "1" : "any";
-        input.value = present ? String(value) : "";
+        input.type = "text";
+        input.inputMode = "decimal";
+        input.value = present ? numberText(value) : "";
         input.addEventListener("input", () => {
-          if (!input.value) { delete parent[key]; remove.hidden = true; }
-          else if (Number.isFinite(input.valueAsNumber)) set(input.valueAsNumber);
+          if (!input.value) {
+            delete parent[key]; remove.hidden = true; input.setCustomValidity("");
+          } else if (numberPattern.test(input.value)) {
+            set(JSON.rawJSON(input.value));
+            input.setCustomValidity("");
+          } else input.setCustomValidity("Enter a number, such as 42, -0.5 or 1e3.");
         });
       } else {
         input = node("textarea");
@@ -245,7 +266,7 @@
   function selectMode(nextMode) {
     if (nextMode === "form") {
       try {
-        const parsed = JSON.parse(raw.value);
+        const parsed = parseJSON(raw.value);
         if (!object(parsed)) throw new Error("The processing activity must be a JSON object.");
         model = parsed;
         redraw();

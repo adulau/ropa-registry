@@ -2,6 +2,7 @@
 import json
 import shutil
 import threading
+from decimal import Decimal
 
 import pytest
 from werkzeug.security import generate_password_hash
@@ -319,3 +320,125 @@ def test_replacing_malformed_field_preserves_other_pending_json_edits(editor_pag
     result = json.loads(page.locator("#payload-json").input_value())
     assert result["extension"] == {"preserved": False}
     assert result["data_subjects"] == []
+
+
+@pytest.mark.parametrize("edit_name", [False, True])
+def test_large_integers_survive_form_save_and_mode_switches(editor_page, editor_server, edit_name):
+    page = editor_page
+    large = 9007199254740993
+    payload = default_activity()
+    payload["id_old"] = large
+    payload["extension"] = {"nested": [large, -large, 10**80], "text": str(large)}
+    payload["description"]["extra_number"] = large
+    uuid = create_record(page, editor_server, payload)
+    assert page.context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
+    assert control(page, "id_old").input_value() == str(large)
+    if edit_name:
+        control(page, "name").fill("Only this name changed")
+        payload["name"] = "Only this name changed"
+        for _ in range(2):
+            page.get_by_role("button", name="JSON editor", exact=True).click()
+            assert json.loads(page.locator("#payload-json").input_value()) == payload
+            page.get_by_role("button", name="Form editor", exact=True).click()
+    save(page)
+    assert page.context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
+
+
+def test_large_integers_can_be_edited_in_numeric_and_extra_fields(editor_page, editor_server):
+    page = editor_page
+    payload = default_activity()
+    payload["id_old"] = 42
+    payload["extension"] = {"value": 1}
+    uuid = create_record(page, editor_server, payload)
+    large = 9007199254740993
+    control(page, "id_old").fill(str(large))
+    control(page, "extension").fill(json.dumps({"value": -large, "nested": [10**80]}))
+    save(page)
+    payload["id_old"] = large
+    payload["extension"] = {"value": -large, "nested": [10**80]}
+    assert page.context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
+
+
+def test_number_lexemes_survive_json_form_roundtrips(editor_page, editor_server):
+    page = editor_page
+    page.goto(editor_server + "/activities/new")
+    page.get_by_role("button", name="JSON editor", exact=True).click()
+    numeric_tokens = ["9007199254740993", "1.23456789012345678901234567890", "1e-1000", "-0", "1E+300"]
+    raw = json.dumps(default_activity())[:-1] + ', "extension": [' + ", ".join(numeric_tokens) + "]}"
+    page.locator("#payload-json").fill(raw)
+    for _ in range(2):
+        page.get_by_role("button", name="Form editor", exact=True).click()
+        control(page, "name").fill("Preserve numeric tokens")
+        page.get_by_role("button", name="JSON editor", exact=True).click()
+        raw = page.locator("#payload-json").input_value()
+        for token in numeric_tokens:
+            assert token in raw
+    numbers = json.loads(raw, parse_float=Decimal)["extension"]
+    assert numbers[0] == 9007199254740993
+    assert numbers[1] == Decimal(numeric_tokens[1])
+    assert numbers[2] == Decimal(numeric_tokens[2])
+
+
+def test_invalid_numeric_edit_blocks_serializing_an_old_value(editor_page, editor_server):
+    page = editor_page
+    payload = default_activity()
+    payload["id_old"] = 9007199254740993
+    create_record(page, editor_server, payload)
+    control(page, "id_old").fill("not a number")
+    page.get_by_role("button", name="JSON editor", exact=True).click()
+    playwright.expect(page.locator("#editor-error")).to_be_visible()
+    playwright.expect(page.locator("#form-editor")).to_be_visible()
+    assert control(page, "id_old").input_value() == "not a number"
+    control(page, "id_old").fill("9007199254740995")
+    page.get_by_role("button", name="JSON editor", exact=True).click()
+    assert json.loads(page.locator("#payload-json").input_value())["id_old"] == 9007199254740995
+
+
+@pytest.mark.parametrize("unsupported", ["rawJSON", "reviver-source"])
+def test_older_browsers_use_raw_json_without_rounding(editor_page, editor_browser, editor_server, unsupported):
+    payload = default_activity()
+    payload["id_old"] = 9007199254740993
+    uuid = create_record(editor_page, editor_server, payload)
+    context = editor_browser.new_context(storage_state=editor_page.context.storage_state())
+    if unsupported == "rawJSON":
+        context.add_init_script("JSON.rawJSON = undefined;")
+    else:
+        context.add_init_script("""const nativeParse = JSON.parse;
+            JSON.parse = (text, reviver) => nativeParse(text, reviver ? (key, value) => reviver(key, value) : undefined);
+        """)
+    page = context.new_page()
+    errors = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{editor_server}/activities/{uuid}/edit")
+    playwright.expect(page.locator("#form-editor")).to_be_hidden()
+    playwright.expect(page.locator("#payload-json")).to_be_visible()
+    playwright.expect(page.locator("#editor-error")).to_contain_text("Update your browser")
+    assert json.loads(page.locator("#payload-json").input_value()) == payload
+    payload["name"] = "Edited with exact integers in the raw fallback"
+    page.locator("#payload-json").fill(json.dumps(payload))
+    save(page)
+    assert context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
+    context.close()
+    assert errors == []
+
+
+@pytest.mark.parametrize("path", [("purpose",), ("description", "RFC_2350_generic", 0)])
+def test_reselecting_legacy_enum_restores_displayed_and_saved_value(editor_page, editor_server, path):
+    page = editor_page
+    payload = default_activity()
+    legacy = "Unrecognised legacy value"
+    if len(path) == 1:
+        payload["purpose"] = legacy
+    else:
+        payload["description"]["RFC_2350_generic"] = [legacy]
+    uuid = create_record(page, editor_server, payload, invalid=True)
+    control(page, *path).select_option("0")
+    control(page, *path).select_option("legacy")
+    assert field(page, *path).locator(".editor-enum-value").inner_text() == legacy
+    page.get_by_role("button", name="JSON editor", exact=True).click()
+    assert json.loads(page.locator("#payload-json").input_value()) == payload
+    page.get_by_role("button", name="Form editor", exact=True).click()
+    control(page, *path).select_option("0")
+    control(page, *path).select_option("legacy")
+    save(page)
+    assert page.context.request.get(f"{editor_server}/api/v1/activities/{uuid}").json()["activity"] == payload
