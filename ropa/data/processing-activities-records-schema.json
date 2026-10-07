@@ -306,7 +306,7 @@
                       "type": "string"
                     }
                   },
-                  "rigths": {
+                  "rights": {
                     "description": "The restriction can apply on the rights listed here",
                     "type": "array",
                     "items": {

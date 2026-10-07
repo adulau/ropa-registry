@@ -9,7 +9,7 @@ from .auth import api_auth_user
 from .db import get_db, utcnow
 from .markdown_export import render_register
 from .permissions import can_edit_scope, can_view_activity
-from .schema import activity_schema, validate_activity
+from .schema import activity_schema, normalize_activity, validate_activity
 
 bp = Blueprint("api", __name__, url_prefix="/api")
 
@@ -31,7 +31,7 @@ def activity_dict(row, include_payload=True):
         "validation_errors": json.loads(row["validation_errors_json"] or "[]"),
         "created_at": row["created_at"], "updated_at": row["updated_at"],
     }
-    if include_payload: d["activity"] = json.loads(row["payload_json"])
+    if include_payload: d["activity"] = normalize_activity(json.loads(row["payload_json"]))
     return d
 
 
@@ -73,6 +73,7 @@ def create_activity(user):
     if not isinstance(payload, dict) or not isinstance(organisation_id, int):
         return jsonify(error="organisation_id (integer) and activity (object) are required"), 400
     if not can_edit_scope(user, organisation_id, department_id): abort(403)
+    payload = normalize_activity(payload)
     errors = validate_activity(payload)
     if errors and request.args.get("allow_invalid") != "true":
         return jsonify(error="Schema validation failed", validation_errors=errors), 422
@@ -99,12 +100,13 @@ def update_activity(user, uuid_value):
     if not isinstance(payload, dict): return jsonify(error="activity object is required"), 400
     organisation_id = body.get("organisation_id", row["organisation_id"]); department_id = body.get("department_id", row["department_id"])
     if not can_edit_scope(user, organisation_id, department_id): abort(403)
+    payload = normalize_activity(payload)
     errors = validate_activity(payload)
     if errors and request.args.get("allow_invalid") != "true":
         return jsonify(error="Schema validation failed", validation_errors=errors), 422
     status = body.get("status", row["status"])
     if status == "active" and errors: return jsonify(error="Invalid records cannot be active", validation_errors=errors), 422
-    before = json.loads(row["payload_json"]); db = get_db()
+    before = normalize_activity(json.loads(row["payload_json"])); db = get_db()
     db.execute("""UPDATE activities SET organisation_id=?,department_id=?,external_id=?,payload_json=?,schema_valid=?,
                 validation_errors_json=?,status=?,updated_by=?,updated_at=? WHERE uuid=?""",
                (organisation_id, department_id, payload.get("id"), json.dumps(payload, ensure_ascii=False), int(not errors),
@@ -135,7 +137,7 @@ def get_schema(user):
 def get_markdown(user, uuid_value):
     row = _api_get(uuid_value)
     if not can_view_activity(user, row): abort(403)
-    payload = json.loads(row["payload_json"])
+    payload = normalize_activity(json.loads(row["payload_json"]))
     body = render_register([{"payload": payload, "meta": activity_dict(row, include_payload=False)}], title=payload.get("name", "Processing activity"))
     return Response(body, mimetype="text/markdown")
 

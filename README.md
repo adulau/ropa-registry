@@ -14,6 +14,10 @@ This was done to operate the GDPR ROPA of a CSIRT. But it could work for any org
   - **viewer** — read and export all processing activities.
   - **admin** — full access, plus organisation, department and user creation and audit-log access.
 - JSON import of one activity or an array of activities.
+- Imports and API writes accept both `data_subject_rights.restrictions[].rigths`
+  (legacy spelling) and `rights`. New records, JSON exports and API responses use
+  only `rights`, including responses for previously stored legacy records. If
+  both spellings occur in a restriction, `rights` takes precedence.
 - Upsert-on-import by numeric processing-activity `id` within the selected organisation/department scope.
 - JSON Schema validation using the supplied Draft-07 schema.
 - Invalid legacy imports are retained as **drafts with validation warnings**. Invalid records cannot be activated.
@@ -49,6 +53,19 @@ Open <http://127.0.0.1:5000>, sign in as the admin, then:
 4. import `ropa/data/example-processing-activities.json` or create a new activity.
 
 For production, do **not** use Flask's development server. Put the application behind a production WSGI server/reverse proxy, configure TLS, set a strong `ROPA_SECRET_KEY`, restrict filesystem permissions on the SQLite database, and back up both the database and exported register.
+
+## Upgrading existing databases
+
+Back up the SQLite database before upgrading. On the first application startup
+with the corrected `rights` schema (or when running `flask --app app init-db`),
+a transactional migration revalidates every persisted activity and refreshes its
+validation state and errors. Invalid active records become drafts; draft and
+archived records retain their status. Valid drafts are not automatically activated.
+Stored payloads remain unchanged, and validation/status changes are recorded in
+the audit log. A migration marker prevents repeat work on later startups.
+
+This also catches malformed `rights` values that the previous schema accepted as
+unrestricted additional properties, despite marking those records valid and active.
 
 ## Data model
 

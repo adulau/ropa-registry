@@ -1,4 +1,6 @@
 import base64
+from copy import deepcopy
+from io import BytesIO
 import json
 from pathlib import Path
 
@@ -7,7 +9,7 @@ from werkzeug.security import generate_password_hash
 
 from ropa import create_app
 from ropa.db import get_db, init_db, utcnow
-from ropa.schema import default_activity, validate_activity
+from ropa.schema import default_activity, normalize_activity, validate_activity
 
 
 def basic(username, password="pw"):
@@ -105,9 +107,296 @@ def test_openapi_is_public(client):
     assert "/v1/activities" in r.get_json()["paths"]
 
 
-def test_supplied_sample_has_compatibility_warnings():
+def test_supplied_sample_accepts_legacy_and_corrected_rights():
     data_path = Path(__file__).parents[1] / "ropa" / "data" / "example-processing-activities.json"
     records = json.loads(data_path.read_text())
-    invalid = [r for r in records if validate_activity(r)]
-    assert len(records) == 30
-    assert len(invalid) > 0
+    assert records
+    for record in records:
+        assert validate_activity(record) == []
+        corrected = normalize_activity(record)
+        assert validate_activity(corrected) == []
+        assert '"rigths"' not in json.dumps(corrected)
+
+
+def restriction_activity(spelling="rights", external_id=1):
+    payload = default_activity(external_id)
+    payload["name"] = "Restriction example"
+    payload["data_subject_rights"]["restrictions"] = [
+        {spelling: ["right_of_erasure", "right_of_restriction"]},
+        {spelling: ["right_of_rectification"]},
+    ]
+    return payload
+
+
+def login_admin(app, client):
+    with app.app_context():
+        uid = get_db().execute("SELECT id FROM users WHERE username='admin'").fetchone()["id"]
+    with client.session_transaction() as session:
+        session["user_id"] = uid
+        session["_csrf_token"] = "test-csrf"
+
+
+def assert_canonical(payload):
+    restrictions = payload["data_subject_rights"]["restrictions"]
+    assert restrictions == [
+        {"rights": ["right_of_erasure", "right_of_restriction"]},
+        {"rights": ["right_of_rectification"]},
+    ]
+
+
+def test_normalization_is_scoped_and_does_not_mutate_input():
+    payload = restriction_activity("rigths")
+    payload["extension"] = {"rigths": "leave unrelated fields alone"}
+    original = deepcopy(payload)
+    normalized = normalize_activity(payload)
+    assert_canonical(normalized)
+    assert normalized["extension"] == payload["extension"]
+    assert payload == original
+    assert normalize_activity(normalized) == normalized
+
+
+def test_corrected_field_takes_precedence():
+    payload = restriction_activity("rigths")
+    payload["data_subject_rights"]["restrictions"][0]["rights"] = []
+    restriction = normalize_activity(payload)["data_subject_rights"]["restrictions"][0]
+    assert restriction == {"rights": []}
+
+
+@pytest.mark.parametrize("spelling", ["rigths", "rights"])
+@pytest.mark.parametrize("value", ["right_of_erasure", ["unknown_right"]])
+def test_both_spellings_are_validated(spelling, value):
+    payload = restriction_activity(spelling)
+    payload["data_subject_rights"]["restrictions"][0][spelling] = value
+    errors = validate_activity(payload)
+    assert any(e["path"].startswith("data_subject_rights.restrictions.0.rights") for e in errors)
+
+
+@pytest.mark.parametrize("spelling", ["rigths", "rights"])
+def test_api_create_and_update_store_and_return_canonical_rights(app, client, spelling):
+    payload = restriction_activity(spelling)
+    response = client.post(
+        "/api/v1/activities", headers=basic("admin"),
+        json={"organisation_id": app.config["TEST_ORG1"], "activity": payload},
+    )
+    assert response.status_code == 201, response.get_data(as_text=True)
+    assert_canonical(response.get_json()["activity"])
+    uuid_value = response.get_json()["uuid"]
+    # Exercise the other spelling on update as well.
+    payload = restriction_activity("rights" if spelling == "rigths" else "rigths")
+    response = client.put(
+        f"/api/v1/activities/{uuid_value}", headers=basic("admin"), json={"activity": payload},
+    )
+    assert response.status_code == 200
+    assert_canonical(response.get_json()["activity"])
+    with app.app_context():
+        row = get_db().execute("SELECT payload_json FROM activities WHERE uuid=?", (uuid_value,)).fetchone()
+        assert_canonical(json.loads(row["payload_json"]))
+
+
+@pytest.mark.parametrize("spelling", ["rigths", "rights"])
+@pytest.mark.parametrize("as_array", [False, True])
+def test_file_import_and_upsert_export_canonical_rights(app, client, spelling, as_array):
+    login_admin(app, client)
+    payload = restriction_activity(spelling)
+    records = [payload] if as_array else payload
+    for _ in range(2):
+        response = client.post("/activities/import", data={
+            "_csrf_token": "test-csrf", "organisation_id": app.config["TEST_ORG1"], "upsert": "1",
+            "json_file": (BytesIO(json.dumps(records).encode()), "activities.json"),
+        })
+        assert response.status_code == 200
+        assert b"0 record(s) have schema warnings" in response.data
+    with app.app_context():
+        rows = get_db().execute("SELECT payload_json FROM activities").fetchall()
+        assert len(rows) == 1
+        assert_canonical(json.loads(rows[0]["payload_json"]))
+    for suffix in ("", "?include_meta=1"):
+        response = client.get("/activities/export.json" + suffix)
+        assert response.status_code == 200
+        assert_canonical(response.get_json()[0])
+        assert ("_meta" in response.get_json()[0]) == bool(suffix)
+
+
+def test_existing_legacy_records_are_canonical_on_read(app, client):
+    response = client.post(
+        "/api/v1/activities", headers=basic("admin"),
+        json={"organisation_id": app.config["TEST_ORG1"], "activity": restriction_activity()},
+    )
+    assert response.status_code == 201
+    uuid_value = response.get_json()["uuid"]
+    legacy_json = json.dumps(restriction_activity("rigths"))
+    with app.app_context():
+        db = get_db()
+        db.execute("UPDATE activities SET payload_json=? WHERE uuid=?", (legacy_json, uuid_value))
+        db.commit()
+    response = client.get(f"/api/v1/activities/{uuid_value}", headers=basic("viewer"))
+    assert response.status_code == 200
+    assert_canonical(response.get_json()["activity"])
+    assert_canonical(client.get("/api/v1/activities", headers=basic("viewer")).get_json()[0]["activity"])
+    login_admin(app, client)
+    for suffix in ("", "?include_meta=1"):
+        assert_canonical(client.get("/activities/export.json" + suffix).get_json()[0])
+    response = client.get(f"/activities/{uuid_value}/edit")
+    assert response.status_code == 200
+    assert b'"rights"' in response.data
+    assert b'"rigths"' not in response.data
+    with app.app_context():
+        row = get_db().execute("SELECT payload_json FROM activities WHERE uuid=?", (uuid_value,)).fetchone()
+        assert row["payload_json"] == legacy_json  # Reads do not rewrite stored data.
+
+
+@pytest.mark.parametrize("spelling", ["rigths", "rights"])
+def test_web_create_and_edit_normalize_rights(app, client, spelling):
+    login_admin(app, client)
+    response = client.post("/activities/new", data={
+        "_csrf_token": "test-csrf", "organisation_id": app.config["TEST_ORG1"],
+        "status": "active", "payload_json": json.dumps(restriction_activity(spelling)),
+    })
+    assert response.status_code == 302
+    location = response.headers["Location"]
+    response = client.post(location + "/edit", data={
+        "_csrf_token": "test-csrf", "organisation_id": app.config["TEST_ORG1"],
+        "status": "active", "payload_json": json.dumps(restriction_activity(spelling)),
+    })
+    assert response.status_code == 302
+    with app.app_context():
+        row = get_db().execute("SELECT payload_json FROM activities").fetchone()
+        assert_canonical(json.loads(row["payload_json"]))
+
+
+def test_published_schemas_only_describe_corrected_rights(client):
+    for url, headers in (("/api/openapi.json", {}), ("/api/v1/schema", basic("admin"))):
+        response = client.get(url, headers=headers)
+        assert response.status_code == 200
+        schema = response.get_json()
+        if url == "/api/openapi.json":
+            schema = schema["components"]["schemas"]["ProcessingActivity"]
+        properties = schema["properties"]["data_subject_rights"]["properties"]["restrictions"]["items"]["properties"]
+        assert "rights" in properties
+        assert "rigths" not in properties
+
+
+def seed_preupgrade_activity(app, client, payload, status="active", valid=True, errors=None):
+    response = client.post(
+        "/api/v1/activities", headers=basic("admin"),
+        json={"organisation_id": app.config["TEST_ORG1"], "activity": restriction_activity()},
+    )
+    assert response.status_code == 201
+    uuid_value = response.get_json()["uuid"]
+    with app.app_context():
+        db = get_db()
+        db.execute(
+            """UPDATE activities SET payload_json=?,schema_valid=?,validation_errors_json=?,
+               status=?,archived_at=? WHERE uuid=?""",
+            (json.dumps(payload), int(valid), json.dumps(errors or []), status,
+             "2025-01-01T00:00:00+00:00" if status == "archived" else None, uuid_value),
+        )
+        # Model an existing database created before migration tracking existed.
+        db.execute("DROP TABLE IF EXISTS schema_migrations")
+        db.commit()
+        return dict(db.execute("SELECT * FROM activities WHERE uuid=?", (uuid_value,)).fetchone())
+
+
+def restart_app(app):
+    return create_app({"TESTING": True, "SECRET_KEY": "test", "DATABASE": app.config["DATABASE"]})
+
+
+@pytest.mark.parametrize("value", ["right_of_erasure", ["unknown_right"]])
+@pytest.mark.parametrize("status", ["active", "draft", "archived"])
+@pytest.mark.parametrize("entrypoint", ["startup", "init-db"])
+def test_upgrade_revalidates_previously_unrestricted_rights(app, client, value, status, entrypoint):
+    payload = restriction_activity()
+    payload["data_subject_rights"]["restrictions"][0]["rights"] = value
+    before = seed_preupgrade_activity(app, client, payload, status)
+    if entrypoint == "startup":
+        upgraded = restart_app(app)
+    else:
+        result = app.test_cli_runner().invoke(args=["init-db"])
+        assert result.exit_code == 0, result.output
+        upgraded = app
+    with upgraded.app_context():
+        db = get_db()
+        row = dict(db.execute("SELECT * FROM activities WHERE uuid=?", (before["uuid"],)).fetchone())
+        assert row["schema_valid"] == 0
+        assert json.loads(row["validation_errors_json"]) == validate_activity(payload)
+        assert row["status"] == ("draft" if status == "active" else status)
+        for field in ("payload_json", "uuid", "organisation_id", "department_id", "external_id",
+                      "created_at", "created_by", "updated_by", "archived_at"):
+            assert row[field] == before[field]
+        audit = db.execute("SELECT * FROM audit_logs WHERE action='schema_revalidate'").fetchall()
+        assert len(audit) == 1
+        details = json.loads(audit[0]["details_json"])
+        assert details["before"]["schema_valid"] == 1
+        assert details["after"]["schema_valid"] == 0
+        migration = dict(db.execute("SELECT * FROM schema_migrations").fetchone())
+
+    upgraded_client = upgraded.test_client()
+    response = upgraded_client.get(f"/api/v1/activities/{before['uuid']}", headers=basic("viewer"))
+    assert response.status_code == 200
+    assert response.get_json()["schema_valid"] is False
+    assert response.get_json()["validation_errors"] == validate_activity(payload)
+    assert response.get_json()["status"] == row["status"]
+    if status != "archived":
+        assert upgraded_client.get("/api/v1/activities", headers=basic("viewer")).get_json()[0]["schema_valid"] is False
+        login_admin(upgraded, upgraded_client)
+        exported = upgraded_client.get("/activities/export.json?include_meta=1").get_json()[0]
+        assert exported["_meta"]["schema_valid"] is False
+        assert exported["_meta"]["status"] == row["status"]
+
+    # Repeated factory startup and explicit initialization do not change rows or add audit entries.
+    restarted = restart_app(upgraded)
+    result = restarted.test_cli_runner().invoke(args=["init-db"])
+    assert result.exit_code == 0, result.output
+    with restarted.app_context():
+        db = get_db()
+        assert dict(db.execute("SELECT * FROM activities WHERE uuid=?", (before["uuid"],)).fetchone()) == row
+        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 1
+        assert dict(db.execute("SELECT * FROM schema_migrations").fetchone()) == migration
+
+
+@pytest.mark.parametrize("spelling", ["rights", "rigths"])
+@pytest.mark.parametrize("status", ["active", "draft", "archived"])
+def test_upgrade_refreshes_valid_records_without_changing_status(app, client, spelling, status):
+    payload = restriction_activity(spelling)
+    before = seed_preupgrade_activity(
+        app, client, payload, status, valid=False, errors=[{"path": "$", "message": "stale error"}],
+    )
+    upgraded = restart_app(app)
+    with upgraded.app_context():
+        row = get_db().execute("SELECT * FROM activities WHERE uuid=?", (before["uuid"],)).fetchone()
+        assert row["schema_valid"] == 1
+        assert json.loads(row["validation_errors_json"]) == []
+        assert row["status"] == status
+        assert row["archived_at"] == before["archived_at"]
+        assert row["payload_json"] == before["payload_json"]
+    response = upgraded.test_client().get(f"/api/v1/activities/{before['uuid']}", headers=basic("viewer"))
+    assert response.status_code == 200
+    assert_canonical(response.get_json()["activity"])
+
+
+def test_upgrade_rolls_back_changes_and_marker_on_failure(app, client, monkeypatch):
+    payload = restriction_activity()
+    payload["data_subject_rights"]["restrictions"][0]["rights"] = ["unknown_right"]
+    before = [seed_preupgrade_activity(app, client, payload) for _ in range(2)]
+    calls = 0
+
+    def failing_validator(payload):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("interrupted upgrade")
+        return validate_activity(payload)
+
+    monkeypatch.setattr("ropa.schema.validate_activity", failing_validator)
+    with pytest.raises(RuntimeError, match="interrupted upgrade"):
+        restart_app(app)
+    with app.app_context():
+        db = get_db()
+        assert [dict(row) for row in db.execute("SELECT * FROM activities ORDER BY id")] == before
+        assert db.execute("SELECT COUNT(*) FROM audit_logs WHERE action='schema_revalidate'").fetchone()[0] == 0
+        assert db.execute("SELECT 1 FROM sqlite_master WHERE name='schema_migrations'").fetchone() is None
+    monkeypatch.undo()
+    upgraded = restart_app(app)
+    with upgraded.app_context():
+        rows = get_db().execute("SELECT status,schema_valid FROM activities").fetchall()
+        assert all(row["status"] == "draft" and row["schema_valid"] == 0 for row in rows)
