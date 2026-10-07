@@ -65,8 +65,10 @@ a transactional migration revalidates every persisted activity and refreshes its
 validation state and errors. Invalid active records become drafts; draft and
 archived records retain their status. Valid drafts are not automatically activated.
 Stored payloads remain unchanged, and validation/status changes are recorded in
-the audit log. A marker derived from the schema prevents repeat work on later
-startups and triggers revalidation when the schema changes again.
+the audit log. The currently applied schema fingerprint prevents repeat work on
+unchanged startups and triggers revalidation on every schema change, including
+rollbacks to a previously used schema. Databases with only historical migration
+markers are revalidated on their first startup with current-schema tracking.
 
 This also catches malformed `rights` values that the previous schema accepted as
 unrestricted additional properties, despite marking those records valid and active.

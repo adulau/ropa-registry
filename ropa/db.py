@@ -111,21 +111,28 @@ def init_db():
 
 
 def upgrade_activity_validation():
-    """Revalidate persisted activities once per schema version, atomically."""
+    """Revalidate persisted activities whenever the applied schema changes, atomically."""
     from .audit import log_action
     from .schema import activity_schema, validate_activity
 
     db = get_db()
     schema_json = json.dumps(activity_schema(), sort_keys=True, separators=(",", ":"))
-    migration = "activity-schema-validation-" + sha256(schema_json.encode("utf-8")).hexdigest()
+    fingerprint = sha256(schema_json.encode("utf-8")).hexdigest()
+    migration = "activity-schema-validation-" + fingerprint
     with db:
-        # Serialize concurrent application startups and commit the marker with the updates.
+        # Serialize concurrent startups and commit the current schema with the updates.
         db.execute("BEGIN IMMEDIATE")
         db.execute("""CREATE TABLE IF NOT EXISTS schema_migrations (
             name TEXT PRIMARY KEY,
             applied_at TEXT NOT NULL
         )""")
-        if db.execute("SELECT 1 FROM schema_migrations WHERE name=?", (migration,)).fetchone():
+        db.execute("""CREATE TABLE IF NOT EXISTS activity_schema_state (
+            id INTEGER PRIMARY KEY CHECK(id=1),
+            fingerprint TEXT NOT NULL,
+            applied_at TEXT NOT NULL
+        )""")
+        state = db.execute("SELECT fingerprint FROM activity_schema_state WHERE id=1").fetchone()
+        if state and state["fingerprint"] == fingerprint:
             return
         for row in db.execute("SELECT * FROM activities").fetchall():
             try:
@@ -154,7 +161,13 @@ def upgrade_activity_validation():
                 log_action(None, "schema_revalidate", "activity", row["uuid"],
                            row["organisation_id"], row["department_id"],
                            details={"migration": migration, "before": before, "after": after})
-        db.execute("INSERT INTO schema_migrations(name,applied_at) VALUES(?,?)", (migration, utcnow()))
+        applied_at = utcnow()
+        db.execute("INSERT OR IGNORE INTO schema_migrations(name,applied_at) VALUES(?,?)", (migration, applied_at))
+        db.execute(
+            """INSERT INTO activity_schema_state(id,fingerprint,applied_at) VALUES(1,?,?)
+               ON CONFLICT(id) DO UPDATE SET fingerprint=excluded.fingerprint,applied_at=excluded.applied_at""",
+            (fingerprint, applied_at),
+        )
 
 
 def init_app(app):
