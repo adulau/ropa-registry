@@ -10,7 +10,7 @@ from .auth import current_user, login_required
 from .db import get_db, utcnow
 from .markdown_export import render_register
 from .permissions import can_edit_scope, can_view_activity, require_activity_view, require_scope_edit
-from .schema import default_activity, validate_activity
+from .schema import default_activity, normalize_activity, validate_activity
 from .security import validate_csrf
 
 bp = Blueprint("views", __name__)
@@ -18,7 +18,7 @@ bp = Blueprint("views", __name__)
 
 def _row_to_activity(row):
     d = dict(row)
-    d["payload"] = json.loads(d.pop("payload_json"))
+    d["payload"] = normalize_activity(json.loads(d.pop("payload_json")))
     d["validation_errors"] = json.loads(d.pop("validation_errors_json") or "[]")
     return d
 
@@ -177,6 +177,7 @@ def activity_new():
         except Exception as exc:
             errors = [{"path": "$", "message": f"Invalid JSON: {exc}"}]
         else:
+            payload = normalize_activity(payload)
             errors = validate_activity(payload)
             status = request.form.get("status", "draft")
             if status == "active" and errors:
@@ -229,6 +230,7 @@ def activity_edit(uuid_value):
         except Exception as exc:
             errors = [{"path": "$", "message": f"Invalid JSON: {exc}"}]
         else:
+            new_payload = normalize_activity(new_payload)
             errors = validate_activity(new_payload)
             status = request.form.get("status", activity["status"])
             if status == "active" and errors:
@@ -305,6 +307,7 @@ def import_activities():
                 details = []
                 now = utcnow()
                 for payload in records:
+                    payload = normalize_activity(payload)
                     errors = validate_activity(payload)
                     invalid += int(bool(errors))
                     external_id = payload.get("id")
@@ -321,7 +324,7 @@ def import_activities():
                                 (organisation_id, department_id, external_id),
                             ).fetchone()
                     if existing:
-                        before = json.loads(existing["payload_json"])
+                        before = normalize_activity(json.loads(existing["payload_json"]))
                         status = existing["status"] if errors or existing["status"] != "active" else "active"
                         if errors and status == "active": status = "draft"
                         db.execute(

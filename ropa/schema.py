@@ -1,4 +1,5 @@
 import json
+from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
 
@@ -23,7 +24,25 @@ def validator():
     return Draft7Validator(activity_schema())
 
 
+def normalize_activity(payload):
+    """Copy an activity and canonicalize the legacy restriction field spelling."""
+    payload = deepcopy(payload)
+    if not isinstance(payload, dict):
+        return payload
+    subject_rights = payload.get("data_subject_rights")
+    if not isinstance(subject_rights, dict):
+        return payload
+    restrictions = subject_rights.get("restrictions")
+    if isinstance(restrictions, list):
+        for restriction in restrictions:
+            if isinstance(restriction, dict) and "rigths" in restriction:
+                legacy = restriction.pop("rigths")
+                restriction.setdefault("rights", legacy)
+    return payload
+
+
 def validate_activity(payload):
+    payload = normalize_activity(payload)
     errors = []
     for err in sorted(validator().iter_errors(payload), key=lambda e: list(e.absolute_path)):
         path = ".".join(str(x) for x in err.absolute_path) or "$"
