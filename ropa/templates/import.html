@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-head"><div><h1>Import processing activities</h1><p class="muted">Import one activity object or an array of activities into an organisation or department.</p></div></div>
+<form method="post" enctype="multipart/form-data" class="card form-stack">
+<input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+<div class="grid two"><label>Organisation<select name="organisation_id" required>{% for o in organisations %}<option value="{{ o['id'] }}" {% if current_user['organisation_id']==o['id'] %}selected{% endif %}>{{ o['name'] }}</option>{% endfor %}</select></label>
+<label>Department<select name="department_id"><option value="">Organisation-wide</option>{% for d in departments %}<option value="{{ d['id'] }}" {% if current_user['department_id']==d['id'] %}selected{% endif %}>{{ d['organisation_name'] ~ ' / ' if d['organisation_name'] is defined else '' }}{{ d['name'] }}</option>{% endfor %}</select></label></div>
+<label>JSON file<input type="file" name="json_file" accept="application/json,.json" required></label>
+<label class="inline"><input type="checkbox" name="upsert" value="1" checked> Update an existing record when its numeric <code>id</code> matches in the same scope</label>
+<p class="hint">Schema-invalid imported records are retained as drafts with validation issues, so legacy data is not silently discarded or rewritten.</p>
+<button class="primary" type="submit">Import</button>
+</form>
+{% if report %}<div class="card"><h2>Import report</h2><p>{{ report.created }} created · {{ report.updated }} updated · {{ report.invalid }} with validation issues.</p><table><thead><tr><th>ID</th><th>Action</th><th>Validation</th></tr></thead><tbody>{% for r in report.details %}<tr><td>{{ r.id }}</td><td>{{ r.action }}</td><td>{% if r.valid %}<span class="badge ok">valid</span>{% else %}<span class="badge warn">{{ r.errors|length }} issue(s)</span>{% endif %}</td></tr>{% endfor %}</tbody></table></div>{% endif %}
+{% endblock %}

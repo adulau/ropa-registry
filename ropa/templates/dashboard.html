@@ -1,0 +1,15 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-head"><div><h1>Processing activities</h1><p class="muted">Record of Processing Activities overview.</p></div>
+{% if current_user['role'] in ('manager','admin') %}<a class="button primary" href="{{ url_for('views.activity_new') }}">New activity</a>{% endif %}</div>
+<div class="metrics">
+  <div class="metric"><strong>{{ counts['total'] or 0 }}</strong><span>Visible records</span></div>
+  <div class="metric"><strong>{{ counts['valid_count'] or 0 }}</strong><span>Schema-valid</span></div>
+  <div class="metric"><strong>{{ counts['draft_count'] or 0 }}</strong><span>Drafts</span></div>
+</div>
+<div class="card">
+  <div class="card-head"><h2>Recently updated</h2><a href="{{ url_for('views.activities') }}">View all</a></div>
+  <table><thead><tr><th>ID</th><th>Activity</th><th>Organisation / department</th><th>Status</th><th>Updated</th></tr></thead><tbody>
+  {% for a in recent %}<tr><td>{{ a['external_id'] or '—' }}</td><td><a href="{{ url_for('views.activity_detail',uuid_value=a['uuid']) }}">{{ a['payload'].get('name','Unnamed') }}</a></td><td>{{ a['organisation_name'] }}{% if a['department_name'] %} / {{ a['department_name'] }}{% endif %}</td><td><span class="badge {{ 'ok' if a['schema_valid'] else 'warn' }}">{{ a['status'] }}{% if not a['schema_valid'] %} · invalid{% endif %}</span></td><td>{{ a['updated_at'] }}</td></tr>{% else %}<tr><td colspan="5" class="muted">No processing activities yet.</td></tr>{% endfor %}
+  </tbody></table>
+</div>
+{% endblock %}

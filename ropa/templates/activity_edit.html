@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block content %}
+<div class="page-head"><div><h1>{{ 'Edit' if activity else 'New' }} processing activity</h1><p class="muted">The activity body is edited as schema-aligned JSON so every current and future extension can be preserved.</p></div></div>
+{% if errors %}<div class="card warning"><h2>Validation issues</h2><p>You can save an invalid record as a draft. It cannot be made active until these issues are fixed.</p><ul>{% for e in errors %}<li><code>{{ e['path'] }}</code>: {{ e['message'] }}</li>{% endfor %}</ul></div>{% endif %}
+<form method="post" class="card form-stack">
+<input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+<div class="grid two"><label>Organisation<select name="organisation_id" required>{% for o in organisations %}<option value="{{ o['id'] }}" {% if (activity and activity['organisation_id']==o['id']) or (not activity and current_user['organisation_id']==o['id']) %}selected{% endif %}>{{ o['name'] }}</option>{% endfor %}</select></label>
+<label>Department<select name="department_id"><option value="">Organisation-wide</option>{% for d in departments %}<option value="{{ d['id'] }}" {% if activity and activity['department_id']==d['id'] %}selected{% elif not activity and current_user['department_id']==d['id'] %}selected{% endif %}>{{ d['organisation_name'] ~ ' / ' if d['organisation_name'] is defined else '' }}{{ d['name'] }}</option>{% endfor %}</select></label></div>
+<label>Status<select name="status"><option value="draft" {% if not activity or activity['status']=='draft' %}selected{% endif %}>Draft</option><option value="active" {% if activity and activity['status']=='active' %}selected{% endif %}>Active (requires valid schema)</option>{% if activity %}<option value="archived" {% if activity['status']=='archived' %}selected{% endif %}>Archived</option>{% endif %}</select></label>
+<label>Processing activity JSON<textarea class="json-editor" name="payload_json" spellcheck="false" required>{{ payload|tojson(indent=2) }}</textarea></label>
+<div class="hint">Tip: use <a href="{{ url_for('api.get_schema') }}" target="_blank">the JSON schema</a> as the authoritative field definition. Existing exchange spellings are preserved for compatibility.</div>
+<div class="actions"><button class="primary" type="submit">Save</button>{% if activity %}<a class="button" href="{{ url_for('views.activity_detail',uuid_value=activity['uuid']) }}">Cancel</a>{% else %}<a class="button" href="{{ url_for('views.activities') }}">Cancel</a>{% endif %}</div>
+</form>
+{% endblock %}

@@ -1,0 +1,13 @@
+{% extends 'base.html' %}{% block title %}Sign in · ROPA Registry{% endblock %}
+{% block content %}
+<div class="auth-card">
+  <h1>Sign in</h1>
+  <p>GDPR Record of Processing Activities registry.</p>
+  <form method="post">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
+    <label>Username<input name="username" autocomplete="username" required autofocus></label>
+    <label>Password<input type="password" name="password" autocomplete="current-password" required></label>
+    <button class="primary" type="submit">Sign in</button>
+  </form>
+</div>
+{% endblock %}
