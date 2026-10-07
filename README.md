@@ -1,6 +1,6 @@
 # ROPA Registry
 
-A lightweight application for managing GDPR Records of Processing Activities (ROPA) using the supplied JSON format and JSON Schema.
+A lightweight application for managing GDPR Records of Processing Activities (ROPA) relying on a standard JSON format.
 
 The application deliberately keeps the processing-activity JSON as the exchange object and stores operational metadata (UUID, organisation/department scope, timestamps, validation state and user references) in SQLite. This keeps the exchange format clean while allowing the format to evolve into a reusable standard.
 
