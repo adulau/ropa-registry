@@ -1,13 +1,24 @@
 {% extends 'base.html' %}{% block content %}
-<div class="page-head"><div><h1>{{ 'Edit' if activity else 'New' }} processing activity</h1><p class="muted">The activity body is edited as schema-aligned JSON so every current and future extension can be preserved.</p></div></div>
+<div class="page-head"><div><h1>{{ 'Edit' if activity else 'New' }} processing activity</h1><p class="muted">Edit the activity using the form or its JSON representation.</p></div></div>
 {% if errors %}<div class="card warning"><h2>Validation issues</h2><p>You can save an invalid record as a draft. It cannot be made active until these issues are fixed.</p><ul>{% for e in errors %}<li><code>{{ e['path'] }}</code>: {{ e['message'] }}</li>{% endfor %}</ul></div>{% endif %}
-<form method="post" class="card form-stack">
+<form method="post" class="card form-stack" id="activity-editor">
 <input type="hidden" name="_csrf_token" value="{{ csrf_token() }}">
-<div class="grid two"><label>Organisation<select name="organisation_id" required>{% for o in organisations %}<option value="{{ o['id'] }}" {% if (activity and activity['organisation_id']==o['id']) or (not activity and current_user['organisation_id']==o['id']) %}selected{% endif %}>{{ o['name'] }}</option>{% endfor %}</select></label>
-<label>Department<select name="department_id"><option value="">Organisation-wide</option>{% for d in departments %}<option value="{{ d['id'] }}" {% if activity and activity['department_id']==d['id'] %}selected{% elif not activity and current_user['department_id']==d['id'] %}selected{% endif %}>{{ d['organisation_name'] ~ ' / ' if d['organisation_name'] is defined else '' }}{{ d['name'] }}</option>{% endfor %}</select></label></div>
-<label>Status<select name="status"><option value="draft" {% if not activity or activity['status']=='draft' %}selected{% endif %}>Draft</option><option value="active" {% if activity and activity['status']=='active' %}selected{% endif %}>Active (requires valid schema)</option>{% if activity %}<option value="archived" {% if activity['status']=='archived' %}selected{% endif %}>Archived</option>{% endif %}</select></label>
-<label>Processing activity JSON<textarea class="json-editor" name="payload_json" spellcheck="false" required>{{ payload|tojson(indent=2) }}</textarea></label>
-<div class="hint">Tip: use <a href="{{ url_for('api.get_schema') }}" target="_blank">the JSON schema</a> as the authoritative field definition. Existing exchange spellings are preserved for compatibility.</div>
+{% set selected_org = request.form.get('organisation_id') if request.method == 'POST' else (activity['organisation_id'] if activity else current_user['organisation_id']) %}
+{% set selected_dept = request.form.get('department_id', '') if request.method == 'POST' else (activity['department_id'] if activity else current_user['department_id']) %}
+{% set selected_status = request.form.get('status', 'draft') if request.method == 'POST' else (activity['status'] if activity else 'draft') %}
+<div class="grid two"><label>Organisation<select name="organisation_id" required>{% for o in organisations %}<option value="{{ o['id'] }}" {% if selected_org|string == o['id']|string %}selected{% endif %}>{{ o['name'] }}</option>{% endfor %}</select></label>
+<label>Department<select name="department_id"><option value="">Organisation-wide</option>{% for d in departments %}<option value="{{ d['id'] }}" {% if selected_dept|string == d['id']|string %}selected{% endif %}>{{ d['organisation_name'] ~ ' / ' if d['organisation_name'] is defined else '' }}{{ d['name'] }}</option>{% endfor %}</select></label></div>
+<label>Status<select name="status"><option value="draft" {% if selected_status=='draft' %}selected{% endif %}>Draft</option><option value="active" {% if selected_status=='active' %}selected{% endif %}>Active (requires valid schema)</option>{% if activity %}<option value="archived" {% if selected_status=='archived' %}selected{% endif %}>Archived</option>{% endif %}</select></label>
+<div class="editor-switch" role="group" aria-label="Editor mode" hidden>
+  <button type="button" id="show-form" aria-pressed="false">Form editor</button>
+  <button type="button" id="show-json" aria-pressed="true">JSON editor</button>
+</div>
+<p id="editor-error" class="flash error" role="alert" hidden></p>
+<div id="form-editor" hidden></div>
+<div id="json-editor-panel"><label>Processing activity JSON<textarea id="payload-json" class="json-editor" name="payload_json" spellcheck="false" required>{% if request.method == 'POST' and errors %}{{ request.form.get('payload_json', '') }}{% else %}{{ payload|tojson(indent=2) }}{% endif %}</textarea></label>
+<p class="hint">The <a href="{{ url_for('api.get_schema') }}" target="_blank" rel="noopener">JSON schema</a> lists supported fields. Additional fields are preserved.</p></div>
 <div class="actions"><button class="primary" type="submit">Save</button>{% if activity %}<a class="button" href="{{ url_for('views.activity_detail',uuid_value=activity['uuid']) }}">Cancel</a>{% else %}<a class="button" href="{{ url_for('views.activities') }}">Cancel</a>{% endif %}</div>
 </form>
+<script type="application/json" id="activity-schema">{{ schema_json }}</script>
+<script src="{{ url_for('static', filename='activity-editor.js') }}" defer></script>
 {% endblock %}

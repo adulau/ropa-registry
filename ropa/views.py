@@ -1,5 +1,6 @@
 import json
 import uuid
+from jinja2.utils import htmlsafe_json_dumps
 
 from flask import (
     Blueprint, Response, abort, flash, redirect, render_template, request, url_for
@@ -10,7 +11,7 @@ from .auth import current_user, login_required
 from .db import get_db, utcnow
 from .markdown_export import render_register
 from .permissions import can_edit_scope, can_view_activity, require_activity_view, require_scope_edit
-from .schema import default_activity, normalize_activity, validate_activity
+from .schema import activity_schema, default_activity, normalize_activity, validate_activity
 from .security import validate_csrf
 
 bp = Blueprint("views", __name__)
@@ -202,7 +203,8 @@ def activity_new():
                 return redirect(url_for("views.activity_detail", uuid_value=auuid))
 
     return render_template("activity_edit.html", activity=None, payload=payload, errors=errors,
-                           organisations=orgs, departments=depts)
+                           organisations=orgs, departments=depts,
+                           schema_json=htmlsafe_json_dumps(activity_schema(), sort_keys=False))
 
 
 @bp.route("/activities/<uuid_value>/edit", methods=("GET", "POST"))
@@ -253,7 +255,8 @@ def activity_edit(uuid_value):
                 flash("Processing activity updated.", "success")
                 return redirect(url_for("views.activity_detail", uuid_value=uuid_value))
     return render_template("activity_edit.html", activity=activity, payload=payload, errors=errors,
-                           organisations=orgs, departments=depts)
+                           organisations=orgs, departments=depts,
+                           schema_json=htmlsafe_json_dumps(activity_schema(), sort_keys=False))
 
 
 @bp.post("/activities/<uuid_value>/archive")
