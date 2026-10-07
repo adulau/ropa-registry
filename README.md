@@ -20,6 +20,9 @@ This was done to operate the GDPR ROPA of a CSIRT. But it could work for any org
   both spellings occur in a restriction, `rights` takes precedence.
 - Upsert-on-import by numeric processing-activity `id` within the selected organisation/department scope.
 - JSON Schema validation using the supplied Draft-07 schema.
+- Optional `legal_ground.NIS2_references` lists CSIRT tasks and cooperation
+  requirements from NIS 2 Article 11 of Directive (EU) 2022/2555. It uses an array
+  of predefined references, like `NISD_references`; both fields may coexist.
 - Invalid legacy imports are retained as **drafts with validation warnings**. Invalid records cannot be activated.
 - JSON export preserving the exchange format.
 - Optional application metadata in JSON export with `?include_meta=1`.
@@ -57,12 +60,13 @@ For production, do **not** use Flask's development server. Put the application b
 ## Upgrading existing databases
 
 Back up the SQLite database before upgrading. On the first application startup
-with the corrected `rights` schema (or when running `flask --app app init-db`),
+with an updated activity schema (or when running `flask --app app init-db`),
 a transactional migration revalidates every persisted activity and refreshes its
 validation state and errors. Invalid active records become drafts; draft and
 archived records retain their status. Valid drafts are not automatically activated.
 Stored payloads remain unchanged, and validation/status changes are recorded in
-the audit log. A migration marker prevents repeat work on later startups.
+the audit log. A marker derived from the schema prevents repeat work on later
+startups and triggers revalidation when the schema changes again.
 
 This also catches malformed `rights` values that the previous schema accepted as
 unrestricted additional properties, despite marking those records valid and active.

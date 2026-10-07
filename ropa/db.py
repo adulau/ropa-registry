@@ -1,5 +1,6 @@
 import json
 import sqlite3
+from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -110,12 +111,13 @@ def init_db():
 
 
 def upgrade_activity_validation():
-    """Revalidate pre-upgrade activities once, atomically, under the rights schema."""
+    """Revalidate persisted activities once per schema version, atomically."""
     from .audit import log_action
-    from .schema import validate_activity
+    from .schema import activity_schema, validate_activity
 
     db = get_db()
-    migration = "restriction-rights-validation-v1"
+    schema_json = json.dumps(activity_schema(), sort_keys=True, separators=(",", ":"))
+    migration = "activity-schema-validation-" + sha256(schema_json.encode("utf-8")).hexdigest()
     with db:
         # Serialize concurrent application startups and commit the marker with the updates.
         db.execute("BEGIN IMMEDIATE")
